@@ -1,0 +1,24 @@
+FROM python:3.11.2-slim-buster
+MAINTAINER Gregory Wiedeman gwiedeman@albany.edu
+
+ENV TZ=America/New_York     DEBIAN_FRONTEND=noninteractive     MAILBAGIT_LOG_LEVEL=info     IN_CONTAINER=true
+
+# Update and install necessary packages
+RUN apt-get -y update && apt-get -y upgrade
+RUN apt-get install -y curl gcc dpkg-dev xfonts-75dpi xfonts-base
+
+# wkhtmltopdf and Google Chrome dependencies
+RUN curl -L -o /tmp/google-chrome-stable_current_amd64.deb         https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb &&     apt-get install -y /tmp/google-chrome-stable_current_amd64.deb
+
+RUN curl -L -o /tmp/wkhtmltox_0.12.6-1.buster_amd64.deb         https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6-1/wkhtmltox_0.12.6-1.buster_amd64.deb &&     dpkg -i /tmp/wkhtmltox_0.12.6-1.buster_amd64.deb
+
+# Install libpff-python
+RUN pip install libpff-python==20211114
+
+# Set up working directory and install Mailbagit in editable mode
+WORKDIR /app
+COPY . /app
+RUN pip install -e .
+
+# Ensure CLI is in PATH
+CMD ["mailbagit"]

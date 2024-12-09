@@ -16,6 +16,7 @@ from io import BytesIO
 from bs4 import BeautifulSoup
 from urllib.parse import quote_plus
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from mailbagit.loggerx import get_logger
 
@@ -156,48 +157,64 @@ class WarcDerivative(Derivative):
 
         return list(dict.fromkeys(external_urls))
 
-    def crawl_external_urls(self, session, request_headers, warc_writer, urls, errors):
+    def crawl_external_urls(self, session, request_headers, warc_writer, urls, errors, timeout=2):
         """
-        Reads a list of urls and crawls them and addes them to a WARC file.
+        Reads a list of urls and crawls them and adds them to a WARC file.
         Parameters:
             session(str): The requests session
             request_headers(dict): A dict of request headers.
             warc_writer(WARCWriter): a warcio WARC writer object for writing pages to a WARC
             urls(list): A list of urls to crawl and add to a WARC.
             errors (List): List of Error objects defined in models.py
+            timeout(int, optional): The timeout in seconds for HTTP requests. Default is 10 seconds.
 
         Returns:
             session(str): The requests session
             warc_writer(WARCWriter): a warcio WARC writer object for writing pages to a WARC
-            url_page_requisites(list): A de-duplicated list page_requisites like CSS and JS that also need to be crawled
+            url_page_requisites(list): A de-duplicated list of page requisites like CSS and JS that also need to be crawled
             errors (List): List of Error objects defined in models.py
         """
         url_page_requisites = []
-        i = 0
-        while i < len(urls):
-            log.debug("capturing " + urls[i])
-            # validate url
-            if self.validate_url(urls[i], errors):
+
+        def fetch_url(url):
+            """
+            Helper function to fetch a single URL and process it.
+            """
+            log.debug("capturing " + url)
+            result = {"requisites": [], "error": None}
+            # Validate URL
+            if self.validate_url(url, errors):
                 with capture_http(warc_writer):
-                    # First try with SSL verification. If fails, raise a warning and turn off
                     try:
-                        r = session.get(urls[i], headers=request_headers)
+                        # Try with SSL verification
+                        r = session.get(url, headers=request_headers, timeout=timeout)
                         if r.status_code != 200:
-                            desc = f"When writing WARC derivative, HTTP {r.status_code} {r.reason} for external resource {urls[i]}"
-                            errors = common.handle_error(errors, None, desc, "warn")
+                            desc = f"When writing WARC derivative, HTTP {r.status_code} {r.reason} for external resource {url}"
+                            common.handle_error(errors, None, desc, "warn")
                         if "content-type" in r.headers.keys():
                             if "text/html" in r.headers["content-type"]:
-                                # Gotta get these external resources as well
+                                # Extract additional resources
                                 new_soup = BeautifulSoup(r.text, "html.parser")
-                                new_external_urls = self.html_external_resources(new_soup, r.url)
-                                url_page_requisites.extend(new_external_urls)
+                                result["requisites"] = self.html_external_resources(new_soup, r.url)
                             elif r.headers["content-type"] == "text/css":
-                                new_external_urls = self.css_external_resources(r.text, r.url)
-                                url_page_requisites.extend(new_external_urls)
+                                result["requisites"] = self.css_external_resources(r.text, r.url)
                     except Exception as e:
-                        desc = f"Failed to request external URL for WARC derivatives ({urls[i]})"
-                        errors = common.handle_error(errors, e, desc)
-            i += 1
+                        desc = f"Failed to request external URL for WARC derivatives ({url})"
+                        common.handle_error(errors, e, desc)
+                        result["error"] = e
+            return result
+
+        # Use ThreadPoolExecutor to fetch URLs in parallel
+        with ThreadPoolExecutor() as executor:
+            futures = {executor.submit(fetch_url, url): url for url in urls}
+            for future in as_completed(futures):
+                url = futures[future]
+                try:
+                    result = future.result()
+                    url_page_requisites.extend(result["requisites"])
+                except Exception as e:
+                    log.error(f"Exception occurred while processing {url}: {e}")
+
         return session, warc_writer, list(dict.fromkeys(url_page_requisites)), errors
 
     def do_task_per_account(self):

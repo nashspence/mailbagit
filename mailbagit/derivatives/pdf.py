@@ -83,31 +83,45 @@ if not skip_registry:
                                 os.path.abspath(html_name),
                                 os.path.abspath(pdf_name),
                             ]
-                            log.debug("Running " + " ".join(command))
+                            log.debug("Running command: " + " ".join(command))
                             p = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                            stdout, stderr = p.communicate()
-                            if p.returncode == 0:
-                                log.debug("Successfully created " + str(message.Mailbag_Message_ID) + ".pdf")
-                            else:
-                                if stdout:
-                                    log.debug("Output converting to " + str(message.Mailbag_Message_ID) + ".pdf: " + stdout.decode("utf-8"))
-                                if stderr:
-                                    desc = (
-                                        "Error converting to "
-                                        + str(message.Mailbag_Message_ID)
-                                        + ".pdf: "
-                                        + stderr.decode("utf-8").replace("\r", "\n").replace("\n\n", "\n")
-                                    )
-                                    errors = common.handle_error(errors, None, desc, "warn")
+                            try:
+                                stdout, stderr = p.communicate(timeout=60)  # Set timeout to 20 seconds
+                                if p.returncode == 0:
+                                    log.debug("Successfully created PDF: " + str(message.Mailbag_Message_ID) + ".pdf")
+                                else:
+                                    if stdout:
+                                        log.debug("wkhtmltopdf stdout: " + stdout.decode("utf-8"))
+                                    if stderr:
+                                        desc = (
+                                            "Error converting to "
+                                            + str(message.Mailbag_Message_ID)
+                                            + ".pdf: "
+                                            + stderr.decode("utf-8").replace("\r", "\n").replace("\n\n", "\n")
+                                        )
+                                        errors = common.handle_error(errors, None, desc, "warn")
+                            except subprocess.TimeoutExpired:
+                                log.warning("wkhtmltopdf process timed out for message ID: " + str(message.Mailbag_Message_ID))
+                                p.kill()
+                                stderr = p.stderr.read()
+                                desc = (
+                                    "Timeout expired while converting to "
+                                    + str(message.Mailbag_Message_ID)
+                                    + ".pdf: "
+                                    + stderr.decode("utf-8").replace("\r", "\n").replace("\n\n", "\n")
+                                )
+                                errors = common.handle_error(errors, None, desc, "warn")
                             # delete the HTML file
                             if os.path.isfile(pdf_name):
                                 os.remove(html_name)
 
                         except Exception as e:
+                            log.error("Exception occurred during HTML to PDF conversion for message ID: " + str(message.Mailbag_Message_ID))
                             desc = "Error writing HTML and converting to PDF derivative"
                             errors = common.handle_error(errors, e, desc)
 
             except Exception as e:
+                log.error("Unhandled exception while creating PDF derivative for message ID: " + str(message.Mailbag_Message_ID))
                 desc = "Error creating PDF derivative"
                 errors = common.handle_error(errors, e, desc)
 
